@@ -56,7 +56,7 @@ import okhttp3.HttpUrl;
 
 @Slf4j
 @PluginDescriptor(name = "Clan Clog Client", description = "Send obtained item data to Clan Clog Submission API, full functionality requires LootTracker",
-	tags = {"clan", "collection", "log", "loot", "drops", "api"}, enabledByDefault = false)
+	tags = {"clan", "collection", "log", "loot", "drops", "api"})
 public class ClanClogPlugin extends Plugin
 {
 	private static final long DEDUPLICATION_MILLIS = 5_000;
