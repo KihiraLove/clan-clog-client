@@ -236,12 +236,14 @@ class SubmissionClient
 	static Request buildRequest(Submission submission, byte[] png, HttpUrl endpoint, String apiKey)
 	{
 		validateChatMessage(submission.getChatMessage());
+		validateItemName(submission.getItemName());
 		MultipartBody.Builder body = new MultipartBody.Builder().setType(MultipartBody.FORM)
 			.addFormDataPart("username", submission.getUsername())
 			.addFormDataPart("clanName", submission.getClanName())
 			.addFormDataPart("itemId", Integer.toString(submission.getItemId()))
 			.addFormDataPart("worldType", submission.getWorldType())
-			.addFormDataPart("chatMessage", submission.getChatMessage());
+			.addFormDataPart("chatMessage", submission.getChatMessage())
+			.addFormDataPart("itemName", submission.getItemName());
 		if (submission.isPersonal())
 		{
 			if (png == null)
@@ -258,6 +260,14 @@ class SubmissionClient
 				.encodeToString(apiKey.getBytes(StandardCharsets.UTF_8)));
 		}
 		return request.build();
+	}
+
+	static void validateItemName(String name)
+	{
+		if (name == null || name.trim().isEmpty() || name.length() > 200 || name.indexOf('\0') >= 0)
+		{
+			throw new IllegalArgumentException("The item name must be nonempty, contain no NUL characters and fit in 200 characters.");
+		}
 	}
 
 	static void validateChatMessage(String message)

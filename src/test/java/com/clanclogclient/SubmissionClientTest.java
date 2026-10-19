@@ -44,11 +44,11 @@ public class SubmissionClientTest
 		Buffer buffer = new Buffer();
 		request.body().writeTo(buffer);
 		String body = buffer.readString(StandardCharsets.ISO_8859_1);
-		for (String field : new String[]{"username", "clanName", "itemId", "worldType", "chatMessage", "screenshot"})
+		for (String field : new String[]{"username", "clanName", "itemId", "worldType", "chatMessage", "itemName", "screenshot"})
 		{
 			assertTrue(body, body.contains("name=\"" + field + "\""));
 		}
-		assertEquals(6, body.split("Content-Disposition:").length - 1);
+		assertEquals(7, body.split("Content-Disposition:").length - 1);
 		assertTrue(body.contains("Collector"));
 		assertTrue(body.contains("Test Clan"));
 		assertTrue(body.contains("4151"));
@@ -57,6 +57,9 @@ public class SubmissionClientTest
 		Buffer chatBytes = new Buffer();
 		((okhttp3.MultipartBody) request.body()).parts().get(4).body().writeTo(chatBytes);
 		assertEquals(submission.getChatMessage(), chatBytes.readUtf8());
+		Buffer nameBytes = new Buffer();
+		((okhttp3.MultipartBody) request.body()).parts().get(5).body().writeTo(nameBytes);
+		assertEquals(submission.getItemName(), nameBytes.readUtf8());
 	}
 
 	@Test
@@ -69,11 +72,60 @@ public class SubmissionClientTest
 		Buffer buffer = new Buffer();
 		request.body().writeTo(buffer);
 		String body = buffer.readUtf8();
-		assertEquals(5, body.split("Content-Disposition:").length - 1);
+		assertEquals(6, body.split("Content-Disposition:").length - 1);
+		assertTrue(body.contains(broadcast.getItemName()));
 		assertTrue(body.contains(broadcast.getChatMessage()));
 		assertTrue(body.contains("name=\"chatMessage\""));
 		assertFalse(body.contains("name=\"screenshot\""));
 		assertFalse(body.contains("image/png"));
+	}
+
+	@Test
+	public void validatesSubmittedItemNameAndPreservesUnicode() throws Exception
+	{
+		for (String invalid : new String[]{null, "", " \t", "drop\0name", "x".repeat(201)})
+		{
+			assertThrows(IllegalArgumentException.class, () -> SubmissionClient.validateItemName(invalid));
+		}
+		SubmissionClient.validateItemName("x".repeat(200));
+		Submission drop = new Submission(UUID.randomUUID(), "Collector", "Test Clan", 4151,
+			" Original \u00e9 item ", "MEMBERS", "Unrecognized chat proof", false, false);
+		Request request = SubmissionClient.buildRequest(drop, null, SubmissionClient.endpoint("https://clan.example/submit"), "");
+		Buffer bytes = new Buffer();
+		((okhttp3.MultipartBody) request.body()).parts().get(5).body().writeTo(bytes);
+		assertEquals(drop.getItemName(), bytes.readUtf8());
+	}
+
+	@Test
+	public void acceptsUnmatchedPendingReceiptWithoutRetrying() throws Exception
+	{
+		AtomicInteger attempts = new AtomicInteger();
+		CompletableFuture<String> notification = new CompletableFuture<>();
+		HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+		server.createContext("/submit", exchange ->
+		{
+			attempts.incrementAndGet();
+			exchange.getRequestBody().readAllBytes();
+			byte[] receipt = "{\"status\":\"pending\",\"itemId\":null,\"gameItemId\":22486}".getBytes(StandardCharsets.UTF_8);
+			exchange.getResponseHeaders().add("Content-Type", "application/json");
+			exchange.sendResponseHeaders(201, receipt.length);
+			exchange.getResponseBody().write(receipt);
+			exchange.close();
+		});
+		server.start();
+		SubmissionClient transport = new SubmissionClient(new OkHttpClient());
+		try
+		{
+			long session = transport.start(notification::complete);
+			assertTrue(transport.submit(broadcast, null, HttpUrl.parse("http://127.0.0.1:" + server.getAddress().getPort() + "/submit"), "", session));
+			assertEquals(broadcast.getItemName() + " submission for " + broadcast.getUsername() + " accepted by API.", notification.get(10, TimeUnit.SECONDS));
+			assertEquals(1, attempts.get());
+		}
+		finally
+		{
+			transport.stop();
+			server.stop(0);
+		}
 	}
 
 	@Test
