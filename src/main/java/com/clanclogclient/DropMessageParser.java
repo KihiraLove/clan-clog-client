@@ -25,15 +25,16 @@ final class DropMessageParser
 			Matcher pet = CLAN_PET.matcher(clean);
 			if (pet.matches())
 			{
-				return drop(pet.group(1), pet.group(2), true, message);
+				return drop(pet.group(1), pet.group(2), true, message, DetectionSource.OTHER);
 			}
 			Matcher collection = CLAN_COLLECTION.matcher(clean);
 			if (collection.matches())
 			{
-				return drop(collection.group(1), collection.group(2), true, message);
+				return drop(collection.group(1), collection.group(2), true, message, DetectionSource.COLLECTION_LOG_MESSAGE);
 			}
 			Matcher valuable = CLAN_DROP.matcher(clean);
-			return valuable.matches() ? drop(valuable.group(1), withoutQuantity(valuable.group(2)), true, message) : Optional.empty();
+			return valuable.matches() ? drop(valuable.group(1), withoutQuantity(valuable.group(2)), true, message,
+				DetectionSource.VALUABLE_ITEM) : Optional.empty();
 		}
 		if (type != ChatMessageType.GAMEMESSAGE && type != ChatMessageType.SPAM)
 		{
@@ -43,15 +44,16 @@ final class DropMessageParser
 		if (gauntlet.matches())
 		{
 			return identity(gauntlet.group(1)).equals(identity(localUsername))
-				? drop(localUsername, withoutQuantity(gauntlet.group(2)), false, message) : Optional.empty();
+				? drop(localUsername, withoutQuantity(gauntlet.group(2)), false, message, DetectionSource.OTHER) : Optional.empty();
 		}
 		Matcher collection = LOCAL_COLLECTION.matcher(clean);
 		if (collection.matches())
 		{
-			return drop(localUsername, collection.group(1), false, message);
+			return drop(localUsername, collection.group(1), false, message, DetectionSource.COLLECTION_LOG_MESSAGE);
 		}
 		Matcher loot = LOCAL_DROP.matcher(clean);
-		return loot.matches() ? drop(localUsername, withoutQuantity(loot.group(1)), false, message) : Optional.empty();
+		return loot.matches() ? drop(localUsername, withoutQuantity(loot.group(1)), false, message,
+			clean.startsWith("Valuable drop:") ? DetectionSource.VALUABLE_ITEM : DetectionSource.UNTRADEABLE_ITEM) : Optional.empty();
 	}
 
 	static String clean(String value)
@@ -70,10 +72,10 @@ final class DropMessageParser
 		return matcher.matches() ? matcher.group(1) : item;
 	}
 
-	private static Optional<Drop> drop(String username, String itemName, boolean broadcast, String chatMessage)
+	private static Optional<Drop> drop(String username, String itemName, boolean broadcast, String chatMessage, DetectionSource source)
 	{
 		String name = clean(username);
-		return name.isEmpty() ? Optional.empty() : Optional.of(new Drop(name, clean(itemName), broadcast, chatMessage));
+		return name.isEmpty() ? Optional.empty() : Optional.of(new Drop(name, clean(itemName), broadcast, chatMessage, source));
 	}
 
 	@Value
@@ -83,5 +85,6 @@ final class DropMessageParser
 		String itemName;
 		boolean broadcast;
 		String chatMessage;
+		DetectionSource source;
 	}
 }

@@ -381,7 +381,7 @@ public class ClanClogPlugin extends Plugin
 			Integer id = catalog.collectionItem(rawItemId);
 			if (id != null)
 			{
-				queueDrop(new DropMessageParser.Drop(localUsername(), catalog.itemName(id), false, raw), id);
+				queueDrop(new DropMessageParser.Drop(localUsername(), catalog.itemName(id), false, raw, DetectionSource.OTHER), id);
 			}
 		}
 	}
@@ -474,7 +474,7 @@ public class ClanClogPlugin extends Plugin
 			}
 			String evidence = "RuneLite Loot Tracker event: " + username + " obtained " + entry.getValue()
 				+ " x " + itemName + " (item ID: " + id + "), source: " + source + ", type: " + event.getType() + ".";
-			queueDrop(new DropMessageParser.Drop(username, itemName, false, evidence), id, true);
+			queueDrop(new DropMessageParser.Drop(username, itemName, false, evidence, DetectionSource.LOOT_TRACKER), id);
 		}
 	}
 
@@ -498,7 +498,8 @@ public class ClanClogPlugin extends Plugin
 			String detail = DropMessageParser.clean(rawDetail);
 			if (started && "Collection log".equalsIgnoreCase(title) && detail.startsWith("New item:"))
 			{
-				recordMessage(new DropMessageParser.Drop(localUsername(), detail.substring("New item:".length()).trim(), false, rawDetail));
+				recordMessage(new DropMessageParser.Drop(localUsername(), detail.substring("New item:".length()).trim(), false,
+					rawDetail, DetectionSource.COLLECTION_LOG_POPUP));
 			}
 		}
 	}
@@ -668,11 +669,6 @@ public class ClanClogPlugin extends Plugin
 		}
 	}
 
-	private void queueDrop(DropMessageParser.Drop drop, int itemId)
-	{
-		queueDrop(drop, itemId, false);
-	}
-
 	private String submissionClanName(boolean broadcast)
 	{
 		if (broadcast)
@@ -731,7 +727,7 @@ public class ClanClogPlugin extends Plugin
 		return null;
 	}
 
-	private void queueDrop(DropMessageParser.Drop drop, int itemId, boolean lootEvent)
+	private void queueDrop(DropMessageParser.Drop drop, int itemId)
 	{
 		String clanName = submissionClanName(drop.isBroadcast());
 		if (clanName.isEmpty() || drop.getUsername().isEmpty())
@@ -766,10 +762,11 @@ public class ClanClogPlugin extends Plugin
 		{
 			String pendingKey = key + ":" + previous;
 			Submission existing = pendingDrops.get(pendingKey);
-			if (!drop.isBroadcast() && existing != null && existing.isLootEvent() && !lootEvent)
+			if (existing != null && drop.getSource().outranks(existing.getSource()))
 			{
-				pendingDrops.put(pendingKey, new Submission(existing.getIdempotencyKey(), drop.getUsername(), clanName,
-					itemId, DropMessageParser.clean(drop.getItemName()), flags, drop.getChatMessage(), true, lootEvent));
+				pendingDrops.put(pendingKey, new Submission(existing.getIdempotencyKey(), existing.getUsername(), existing.getClanName(),
+					existing.getItemId(), existing.getItemName(), existing.getWorldType(), drop.getChatMessage(),
+					existing.isPersonal(), drop.getSource()));
 			}
 			return;
 		}
@@ -781,7 +778,7 @@ public class ClanClogPlugin extends Plugin
 		recentDrops.put(key, now);
 		pendingDrops.put(key + ":" + now, new Submission(UUID.randomUUID(), drop.getUsername(), clanName, itemId,
 			DropMessageParser.clean(drop.getItemName()), flags,
-			drop.getChatMessage(), !drop.isBroadcast(), lootEvent));
+			drop.getChatMessage(), !drop.isBroadcast(), drop.getSource()));
 	}
 
 	private void warnOnce(String warning)

@@ -52,6 +52,14 @@ import static org.mockito.Mockito.*;
 public class ClanClogDetectionTest
 {
 	private static final String RAID_MESSAGE = "Nerd\u00a0Stark received special loot from a raid: Scythe of Vitur (uncharged) (1,188,452,005 coins).";
+	private static final String[] PRIORITY_MESSAGES = {
+		" New item added to your collection log: <col=ff0000>Abyssal\u00a0whip</col> ",
+		"<col=ff0000>New item: Abyssal whip</col>",
+		"Valuable drop: Abyssal whip (1,000,000 coins)",
+		"Untradeable drop: Abyssal whip",
+		"RuneLite Loot Tracker event: Local Player obtained 1 x Abyssal whip (item ID: 4151), source: Abyssal demon, type: NPC.",
+		"Local Player has received a drop: 1 x Abyssal whip."
+	};
 	@Mock private Client client;
 	@Mock private ClientThread clientThread;
 	@Mock private DrawManager drawManager;
@@ -150,7 +158,7 @@ public class ClanClogDetectionTest
 	}
 
 	@Test
-	public void uniqueFishingMessagePreservesOriginalProofAndMergesLoot()
+	public void lootTrackerOutranksUniqueFishingMessageAndMergesBothTriggers()
 	{
 		when(catalog.collectionItem(ItemID.GOLDEN_TENCH)).thenReturn(ItemID.GOLDEN_TENCH);
 		when(catalog.itemName(ItemID.GOLDEN_TENCH)).thenReturn("Golden tench");
@@ -158,8 +166,8 @@ public class ClanClogDetectionTest
 		String text = "The cormorant has brought you a very strange tench.";
 		message(ChatMessageType.SPAM, text);
 		Submission receipt = submitPersonalAndCapture();
-		assertEquals(text, receipt.getChatMessage());
-		assertFalse(receipt.isLootEvent());
+		assertTrue(receipt.getChatMessage().startsWith("RuneLite Loot Tracker event:"));
+		assertTrue(receipt.isLootEvent());
 	}
 
 	@Test
@@ -600,9 +608,9 @@ public class ClanClogDetectionTest
 	@Test
 	public void localDropIncludesExactMessageScreenshotAndFrozenMetadata()
 	{
-		String raw = " Valuable drop: <col=ff0000>Abyssal whip</col> (1,000,000 coins) ";
+		String raw = " New item added to your collection log: <col=ff0000>Abyssal\u00a0whip</col> ";
+		message(ChatMessageType.GAMEMESSAGE, "Valuable drop: Abyssal whip (1,000,000 coins)");
 		message(ChatMessageType.GAMEMESSAGE, raw);
-		message(ChatMessageType.GAMEMESSAGE, "New item added to your collection log: Abyssal whip");
 		message(ChatMessageType.CLAN_MESSAGE, "Local_Player received a new collection log item: Abyssal whip (10/1717)");
 		popup("New item: Abyssal whip");
 		when(client.getWorldType()).thenReturn(EnumSet.of(WorldType.PVP));
@@ -618,6 +626,111 @@ public class ClanClogDetectionTest
 		assertEquals("[\"MEMBERS\"]", receipt.getValue().getWorldType());
 		assertEquals(raw, receipt.getValue().getChatMessage());
 		assertTrue(receipt.getValue().isPersonal());
+	}
+
+	@Test
+	public void everyPriorityPairSelectsTheHigherMessageInEitherArrivalOrder()
+	{
+		for (int higher = 0; higher < PRIORITY_MESSAGES.length; higher++)
+		{
+			for (int lower = higher + 1; lower < PRIORITY_MESSAGES.length; lower++)
+			{
+				assertSelectedPriority(new int[]{higher, lower}, higher);
+				assertSelectedPriority(new int[]{lower, higher}, higher);
+			}
+		}
+	}
+
+	@Test
+	public void allSixTriggersSelectCollectionLogTextRegardlessOfArrivalOrder()
+	{
+		assertSelectedPriority(new int[]{0, 1, 2, 3, 4, 5}, 0);
+		assertSelectedPriority(new int[]{5, 4, 3, 2, 1, 0}, 0);
+		assertSelectedPriority(new int[]{4, 2, 5, 0, 3, 1}, 0);
+	}
+
+	@Test
+	public void equalPriorityKeepsTheFirstOriginalMessage()
+	{
+		String first = PRIORITY_MESSAGES[2];
+		message(ChatMessageType.GAMEMESSAGE, first);
+		message(ChatMessageType.GAMEMESSAGE, " Valuable drop: <col=ff0000>Abyssal whip</col> (2,000,000 coins) ");
+		assertEquals(first, submitPersonalAndCapture().getChatMessage());
+	}
+
+	@Test
+	public void collectionBroadcastOutranksEarlierValuableBroadcastWithoutScreenshot()
+	{
+		message(ChatMessageType.CLAN_MESSAGE, "Other Player received a drop: Abyssal whip (1,000,000 coins).");
+		String raw = "Other Player received a new collection log item: <col=ff0000>Abyssal whip</col> (10/1717)";
+		message(ChatMessageType.CLAN_MESSAGE, raw);
+		Submission receipt = submitBroadcastAndCapture();
+		assertEquals(raw, receipt.getChatMessage());
+		assertEquals(DetectionSource.COLLECTION_LOG_MESSAGE, receipt.getSource());
+		assertFalse(receipt.isPersonal());
+	}
+
+	@Test
+	public void higherPriorityCannotReplaceEvidenceAfterTheScreenshotBatchIsTaken()
+	{
+		loot(4151);
+		plugin.onGameTick(new GameTick());
+		message(ChatMessageType.GAMEMESSAGE, PRIORITY_MESSAGES[0]);
+		drawNextFrame();
+		plugin.onGameTick(new GameTick());
+		ArgumentCaptor<Submission> receipt = ArgumentCaptor.forClass(Submission.class);
+		verify(submissions).submit(receipt.capture(), any(BufferedImage.class), any(), any(), anyLong());
+		assertEquals(PRIORITY_MESSAGES[4], receipt.getValue().getChatMessage());
+		assertTrue(receipt.getValue().isLootEvent());
+		verify(drawManager).requestNextFrameListener(any());
+	}
+
+	@Test
+	public void priorityUpgradeDoesNotExtendTheFiveSecondWindow()
+	{
+		message(ChatMessageType.GAMEMESSAGE, PRIORITY_MESSAGES[2]);
+		when(clock.millis()).thenReturn(1_004_000L);
+		message(ChatMessageType.GAMEMESSAGE, PRIORITY_MESSAGES[0]);
+		Submission first = submitPersonalAndCapture();
+		when(clock.millis()).thenReturn(1_005_000L);
+		message(ChatMessageType.GAMEMESSAGE, PRIORITY_MESSAGES[2]);
+		plugin.onGameTick(new GameTick());
+		ArgumentCaptor<Consumer<Image>> frames = ArgumentCaptor.forClass(Consumer.class);
+		verify(drawManager, times(2)).requestNextFrameListener(frames.capture());
+		frames.getAllValues().get(1).accept(new BufferedImage(4, 4, BufferedImage.TYPE_INT_RGB));
+		ArgumentCaptor<Submission> receipts = ArgumentCaptor.forClass(Submission.class);
+		verify(submissions, times(2)).submit(receipts.capture(), any(BufferedImage.class), any(), any(), anyLong());
+		Submission second = receipts.getAllValues().get(1);
+		assertEquals(PRIORITY_MESSAGES[0], first.getChatMessage());
+		assertEquals(PRIORITY_MESSAGES[2], second.getChatMessage());
+		assertNotEquals(first.getIdempotencyKey(), second.getIdempotencyKey());
+	}
+
+	private void assertSelectedPriority(int[] arrivalOrder, int expected)
+	{
+		for (int source : arrivalOrder)
+		{
+			if (source == 1)
+			{
+				popup(PRIORITY_MESSAGES[source]);
+			}
+			else if (source == 4)
+			{
+				loot(4151);
+			}
+			else
+			{
+				message(ChatMessageType.GAMEMESSAGE, PRIORITY_MESSAGES[source]);
+			}
+		}
+		Submission receipt = submitPersonalAndCapture();
+		assertEquals(Arrays.toString(arrivalOrder), PRIORITY_MESSAGES[expected], receipt.getChatMessage());
+		assertEquals(DetectionSource.values()[expected], receipt.getSource());
+		// Each order is a separate acquisition/session, with exactly one claim and one frame.
+		verify(drawManager).requestNextFrameListener(any());
+		plugin.shutDown();
+		plugin.startUp();
+		clearInvocations(submissions, drawManager);
 	}
 
 	@Test

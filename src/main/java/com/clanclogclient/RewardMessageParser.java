@@ -23,7 +23,7 @@ final class RewardMessageParser
 		Map.entry("You catch a huge halibut!", ItemID.POH_TROPHYDROP_HALIBUT),
 		Map.entry("You catch a purplefin!", ItemID.POH_TROPHYDROP_BLUEFIN),
 		Map.entry("You catch a swift marlin!", ItemID.POH_TROPHYDROP_MARLIN),
-		Map.entry("You find a Hespori seed.", ItemID.HESPORI_SEED)
+		Map.entry("You find a Hespori seed!", ItemID.HESPORI_SEED)
 	);
 	private static final Map<String, Integer> DIALOG_ITEMS = Map.ofEntries(
 		Map.entry("You are given a gnome pilot's scarf as a tip.", ItemID.ALUFT_GNOME_SCARF),

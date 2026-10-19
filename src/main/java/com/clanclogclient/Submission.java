@@ -14,5 +14,10 @@ class Submission
 	String worldType;
 	String chatMessage;
 	boolean personal;
-	boolean lootEvent;
+	DetectionSource source;
+
+	boolean isLootEvent()
+	{
+		return source == DetectionSource.LOOT_TRACKER;
+	}
 }

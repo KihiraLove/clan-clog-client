@@ -23,11 +23,11 @@ import static org.junit.Assert.*;
 public class SubmissionClientTest
 {
 	private final Submission submission = new Submission(UUID.randomUUID(), "Collector", "Test Clan", 4151, "Abyssal whip",
-		"[\"MEMBERS\",\"HARDCORE_MAIN\"]", " Valuable drop: <col=ff0000>Abyssal\u00a0whip</col> (1,000,000 coins) ", true, false);
+		"[\"MEMBERS\",\"HARDCORE_MAIN\"]", " Valuable drop: <col=ff0000>Abyssal\u00a0whip</col> (1,000,000 coins) ", true, DetectionSource.VALUABLE_ITEM);
 	private final Submission broadcast = new Submission(UUID.randomUUID(), "Nerd Stark", "Test Clan", 22486, "Scythe of Vitur (uncharged)",
-		"[\"MEMBERS\"]", "Nerd\u00a0Stark received special loot from a raid: Scythe of Vitur (uncharged) (1,188,452,005 coins).", false, false);
+		"[\"MEMBERS\"]", "Nerd\u00a0Stark received special loot from a raid: Scythe of Vitur (uncharged) (1,188,452,005 coins).", false, DetectionSource.VALUABLE_ITEM);
 	private final Submission silentLoot = new Submission(UUID.randomUUID(), "Collector", "Test Clan", 4151, "Abyssal whip",
-		"[\"MEMBERS\"]", "RuneLite Loot Tracker event: Collector obtained 1 x Abyssal whip (item ID: 4151), source: Abyssal demon, type: NPC.", true, true);
+		"[\"MEMBERS\"]", "RuneLite Loot Tracker event: Collector obtained 1 x Abyssal whip (item ID: 4151), source: Abyssal demon, type: NPC.", true, DetectionSource.LOOT_TRACKER);
 
 	@Test
 	public void requestMatchesApiContractAndPreservesExactUnicodeKey() throws Exception

@@ -34,14 +34,27 @@ Each request is `POST multipart/form-data`:
 | `clanName` | Primary clan name for personal drops and for broadcasts |
 | `itemId` | Obtainable OSRS game item ID |
 | `worldType` | JSON array of RuneLite world flags: the local world for personal drops, the recipient's world for broadcasts |
-| `chatMessage` | Original chat/popup text, or a labeled Loot Tracker event summary when no message exists |
+| `chatMessage` | Original chat/popup text, or a labeled Loot Tracker event summary when no message exists (message chosen by priority list if there are multiple) |
 | `screenshot` | PNG game frame with MIME type `image/png`, not included for clan broadcast submissions |
 
 Each drop gets a UUID `Idempotency-Key`.
 The exact key, message, multipart body and screenshot are reused across retries.
 The clan key is sent as UTF-8, unpadded base64 url in `X-Clan-API-Key-Base64`, preserving Unicode and whitespace.
 
-Every submission includes `chatMessage` of the triggering message.
+Every submission includes `chatMessage` of the selected triggering message.
+For matching pending claims, evidence is preferred in this order:
+
+1. New collection log chat message
+2. New collection log popup (in case message is disabled, but popup is not)
+3. Valuable item message/Untradeable item message
+4. Loot Tracker event
+5. Other detection (unique messages, dialogs, obtain context)
+
+Higher priority trigger replaces lower priority text while the claim is pending.
+Equal priorities keep the first message. The original recipient, clan, item, world flags,
+request key and the five second window remains unchanged is the text is replaced. Once the pending batch is taken
+for screenshot capture (or a broadcast is sent), its proof is fixed across retries.
+
 For chat notifications, the original Unicode, whitespace and RuneLite markup are preserved.
 Popup-only collection notifications use the original popup's main text.
 When the obtained item is detected with `Loot Tracker` and there is no message to send, the following is sent as `chatMessage`:
