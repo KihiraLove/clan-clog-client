@@ -8,6 +8,8 @@ import java.util.Arrays;
 import java.util.EnumSet;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.Future;
 import java.util.function.Consumer;
 import net.runelite.api.ChatMessageType;
 import net.runelite.api.Client;
@@ -36,6 +38,9 @@ import net.runelite.api.widgets.Widget;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.events.ConfigChanged;
 import net.runelite.client.game.ItemStack;
+import net.runelite.client.game.WorldService;
+import net.runelite.client.events.WorldsFetch;
+import net.runelite.http.api.worlds.WorldResult;
 import net.runelite.client.plugins.loottracker.LootReceived;
 import net.runelite.client.ui.DrawManager;
 import net.runelite.http.api.loottracker.LootRecordType;
@@ -70,6 +75,8 @@ public class ClanClogDetectionTest
 	@Mock private ClanChannelMember raidMember;
 	@Mock private World recipientWorld;
 	@Mock private Clock clock;
+	@Mock private WorldService worldService;
+	@Mock private ScheduledExecutorService executor;
 	private ClanClogPlugin plugin;
 	private AutoCloseable mocks;
 
@@ -86,6 +93,8 @@ public class ClanClogDetectionTest
 			binder.bind(ClanClogConfig.class).toInstance(config);
 			binder.bind(CollectionLogCatalog.class).toInstance(catalog);
 			binder.bind(SubmissionClient.class).toInstance(submissions);
+			binder.bind(WorldService.class).toInstance(worldService);
+			binder.bind(ScheduledExecutorService.class).toInstance(executor);
 		}).injectMembers(plugin);
 		when(clock.millis()).thenReturn(1_000_000L);
 		when(client.getGameState()).thenReturn(GameState.LOGGED_IN);
@@ -481,6 +490,139 @@ public class ClanClogDetectionTest
 	}
 
 	@Test
+	public void broadcastOnWorld470UsesWorldServiceWhenClientWorldListIsNull()
+	{
+		when(client.getWorldList()).thenReturn(null);
+		when(client.getWorldType()).thenReturn(EnumSet.of(WorldType.PVP));
+		when(raidMember.getWorld()).thenReturn(470);
+		EnumSet<net.runelite.http.api.worlds.WorldType> types = EnumSet.of(net.runelite.http.api.worlds.WorldType.MEMBERS,
+			net.runelite.http.api.worlds.WorldType.SEASONAL);
+		net.runelite.http.api.worlds.World world = net.runelite.http.api.worlds.World.builder().id(470).types(types).build();
+		WorldResult result = new WorldResult();
+		result.setWorlds(java.util.Collections.singletonList(world));
+		plugin.onWorldsFetch(new WorldsFetch(result));
+		message(ChatMessageType.CLAN_MESSAGE, RAID_MESSAGE);
+		types.clear();
+		types.add(net.runelite.http.api.worlds.WorldType.PVP);
+		plugin.onWorldsFetch(new WorldsFetch(result));
+		Submission receipt = submitBroadcastAndCapture();
+		assertEquals("[\"MEMBERS\",\"SEASONAL\"]", receipt.getWorldType());
+		assertEquals(RAID_MESSAGE, receipt.getChatMessage());
+		assertEquals("Nerd Stark", receipt.getUsername());
+		assertFalse(receipt.isPersonal());
+		verify(worldService, never()).getWorlds();
+	}
+
+	@Test
+	public void serviceSnapshotCopiesFlagsAndConvertsHttpWorldTypeNames()
+	{
+		EnumSet<net.runelite.http.api.worlds.WorldType> types = EnumSet.of(
+			net.runelite.http.api.worlds.WorldType.MEMBERS, net.runelite.http.api.worlds.WorldType.TOURNAMENT);
+		plugin.onWorldsFetch(new WorldsFetch(serviceResult(302, types)));
+		types.clear();
+		message(ChatMessageType.CLAN_MESSAGE, RAID_MESSAGE);
+		assertEquals("[\"MEMBERS\",\"TOURNAMENT_WORLD\"]", submitBroadcastAndCapture().getWorldType());
+	}
+
+	@Test
+	public void refreshedWorldServiceDataTakesPriorityOverClientWorldList()
+	{
+		plugin.onWorldsFetch(new WorldsFetch(serviceResult(302,
+			EnumSet.of(net.runelite.http.api.worlds.WorldType.MEMBERS))));
+		plugin.onWorldsFetch(new WorldsFetch(serviceResult(302,
+			EnumSet.of(net.runelite.http.api.worlds.WorldType.PVP))));
+		message(ChatMessageType.CLAN_MESSAGE, RAID_MESSAGE);
+		assertEquals("[\"PVP\"]", submitBroadcastAndCapture().getWorldType());
+	}
+
+	@Test
+	public void emptyWorldServiceFlagsAreValidAndDoNotFallBackToOtherSources()
+	{
+		plugin.onWorldsFetch(new WorldsFetch(serviceResult(302,
+			EnumSet.noneOf(net.runelite.http.api.worlds.WorldType.class))));
+		message(ChatMessageType.CLAN_MESSAGE, RAID_MESSAGE);
+		assertEquals("[]", submitBroadcastAndCapture().getWorldType());
+	}
+
+	@Test
+	public void unavailableWorldServiceFlagsCanUseTheMatchingClientWorld()
+	{
+		plugin.onWorldsFetch(new WorldsFetch(serviceResult(302, null)));
+		message(ChatMessageType.CLAN_MESSAGE, RAID_MESSAGE);
+		assertEquals("[\"MEMBERS\"]", submitBroadcastAndCapture().getWorldType());
+	}
+
+	@Test
+	public void worldServiceBootstrapRunsInExecutorWithoutBlockingBroadcastLookup()
+	{
+		when(client.getWorldList()).thenReturn(null);
+		when(worldService.getWorlds()).thenReturn(serviceResult(302,
+			EnumSet.of(net.runelite.http.api.worlds.WorldType.MEMBERS)));
+		ArgumentCaptor<Runnable> bootstrap = ArgumentCaptor.forClass(Runnable.class);
+		verify(executor).submit(bootstrap.capture());
+		verify(worldService, never()).getWorlds();
+		bootstrap.getValue().run();
+		message(ChatMessageType.CLAN_MESSAGE, RAID_MESSAGE);
+		assertEquals("[\"MEMBERS\"]", submitBroadcastAndCapture().getWorldType());
+		verify(worldService).getWorlds();
+	}
+
+	@Test
+	public void lateWorldServiceBootstrapDoesNotOverwriteNewerWorldsFetchData()
+	{
+		when(worldService.getWorlds()).thenReturn(serviceResult(302,
+			EnumSet.of(net.runelite.http.api.worlds.WorldType.MEMBERS)));
+		ArgumentCaptor<Runnable> bootstrap = ArgumentCaptor.forClass(Runnable.class);
+		verify(executor).submit(bootstrap.capture());
+		plugin.onWorldsFetch(new WorldsFetch(serviceResult(302,
+			EnumSet.of(net.runelite.http.api.worlds.WorldType.PVP))));
+		bootstrap.getValue().run();
+		message(ChatMessageType.CLAN_MESSAGE, RAID_MESSAGE);
+		assertEquals("[\"PVP\"]", submitBroadcastAndCapture().getWorldType());
+	}
+
+	@Test
+	public void worldServiceBootstrapFromPreviousSessionCannotPopulateNewSession()
+	{
+		when(client.getWorldList()).thenReturn(null);
+		when(worldService.getWorlds()).thenReturn(serviceResult(302,
+			EnumSet.of(net.runelite.http.api.worlds.WorldType.MEMBERS)));
+		ArgumentCaptor<Runnable> bootstrap = ArgumentCaptor.forClass(Runnable.class);
+		verify(executor).submit(bootstrap.capture());
+		plugin.shutDown();
+		plugin.startUp();
+		bootstrap.getValue().run();
+		message(ChatMessageType.CLAN_MESSAGE, RAID_MESSAGE);
+		plugin.onGameTick(new GameTick());
+		verify(submissions, never()).submit(any(), any(), any(), any(), anyLong());
+		plugin.onWorldsFetch(new WorldsFetch(serviceResult(302,
+			EnumSet.of(net.runelite.http.api.worlds.WorldType.SEASONAL))));
+		message(ChatMessageType.CLAN_MESSAGE, RAID_MESSAGE);
+		assertEquals("[\"SEASONAL\"]", submitBroadcastAndCapture().getWorldType());
+	}
+
+	@Test
+	public void shutdownCancelsWorldServiceBootstrapWithoutStoppingSharedExecutor()
+	{
+		plugin.shutDown();
+		Future<?> bootstrap = mock(Future.class);
+		doReturn(bootstrap).when(executor).submit(any(Runnable.class));
+		plugin.startUp();
+		plugin.shutDown();
+		verify(bootstrap).cancel(false);
+		verify(executor, never()).shutdown();
+		verify(executor, never()).shutdownNow();
+	}
+
+	private WorldResult serviceResult(int id, EnumSet<net.runelite.http.api.worlds.WorldType> types)
+	{
+		net.runelite.http.api.worlds.World world = net.runelite.http.api.worlds.World.builder().id(id).types(types).build();
+		WorldResult result = new WorldResult();
+		result.setWorlds(java.util.Collections.singletonList(world));
+		return result;
+	}
+
+	@Test
 	public void broadcastFreezesRecipientWorldFlagsBeforeTheyHop()
 	{
 		EnumSet<WorldType> recipientTypes = EnumSet.of(WorldType.MEMBERS, WorldType.HARDCORE_MAIN);
@@ -524,6 +666,8 @@ public class ClanClogDetectionTest
 		when(raidMember.getWorld()).thenReturn(301);
 		when(client.getWorldType()).thenReturn(EnumSet.of(WorldType.MEMBERS, WorldType.SEASONAL));
 		when(client.getWorldList()).thenReturn(null);
+		plugin.onWorldsFetch(new WorldsFetch(serviceResult(301,
+			EnumSet.of(net.runelite.http.api.worlds.WorldType.MEMBERS))));
 		message(ChatMessageType.CLAN_MESSAGE, RAID_MESSAGE);
 		assertEquals("[\"MEMBERS\",\"SEASONAL\"]", submitBroadcastAndCapture().getWorldType());
 	}

@@ -6,6 +6,7 @@ import java.awt.Image;
 import java.awt.image.BufferedImage;
 import java.time.Clock;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -15,6 +16,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.Future;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.stream.Collectors;
 import javax.inject.Inject;
 import lombok.extern.slf4j.Slf4j;
@@ -46,12 +49,16 @@ import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.events.ConfigChanged;
+import net.runelite.client.events.WorldsFetch;
 import net.runelite.client.game.ItemStack;
+import net.runelite.client.game.WorldService;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
 import net.runelite.client.plugins.loottracker.LootReceived;
 import net.runelite.client.ui.DrawManager;
+import net.runelite.client.util.WorldUtil;
 import net.runelite.http.api.loottracker.LootRecordType;
+import net.runelite.http.api.worlds.WorldResult;
 import okhttp3.HttpUrl;
 
 @Slf4j
@@ -72,6 +79,12 @@ public class ClanClogPlugin extends Plugin
 	@Inject private ClanClogConfig config;
 	@Inject private CollectionLogCatalog catalog;
 	@Inject private SubmissionClient submissions;
+	@Inject private WorldService worldService;
+	@Inject private ScheduledExecutorService executor;
+
+	private volatile Map<Integer, EnumSet<WorldType>> serviceWorldTypes;
+	private volatile long worldCacheSession;
+	private Future<?> worldBootstrap;
 
 	private final DropMessageParser parser = new DropMessageParser();
 	private final RewardMessageParser rewardParser = new RewardMessageParser();
@@ -107,6 +120,26 @@ public class ClanClogPlugin extends Plugin
 	{
 		running = true;
 		generation++;
+		long cacheSession = ++worldCacheSession;
+		serviceWorldTypes = null;
+		worldBootstrap = executor.submit(() ->
+		{
+			try
+			{
+				WorldResult result = worldService.getWorlds();
+				clientThread.invoke(() ->
+				{
+					if (running && cacheSession == worldCacheSession && serviceWorldTypes == null)
+					{
+						cacheServiceWorlds(result);
+					}
+				});
+			}
+			catch (RuntimeException ex)
+			{
+				log.debug("Unable to initialize the RuneLite world service snapshot", ex);
+			}
+		});
 		uploadSession = submissions.start(this::notifyPlayer);
 		clientThread.invoke(() ->
 		{
@@ -123,6 +156,13 @@ public class ClanClogPlugin extends Plugin
 	{
 		running = false;
 		generation++;
+		worldCacheSession++;
+		serviceWorldTypes = null;
+		if (worldBootstrap != null)
+		{
+			worldBootstrap.cancel(false);
+			worldBootstrap = null;
+		}
 		submissions.stop();
 		reset();
 		catalog.clear();
@@ -132,6 +172,36 @@ public class ClanClogPlugin extends Plugin
 	ClanClogConfig provideConfig(ConfigManager manager)
 	{
 		return manager.getConfig(ClanClogConfig.class);
+	}
+
+	@Subscribe
+	public void onWorldsFetch(WorldsFetch event)
+	{
+		long cacheSession = worldCacheSession;
+		clientThread.invoke(() ->
+		{
+			if (running && cacheSession == worldCacheSession)
+			{
+				cacheServiceWorlds(event.getWorldResult());
+			}
+		});
+	}
+
+	private void cacheServiceWorlds(WorldResult result)
+	{
+		if (result == null || result.getWorlds() == null)
+		{
+			return;
+		}
+		Map<Integer, EnumSet<WorldType>> snapshot = new HashMap<>();
+		for (net.runelite.http.api.worlds.World world : result.getWorlds())
+		{
+			if (world != null)
+			{
+				snapshot.put(world.getId(), world.getTypes() == null ? null : WorldUtil.toWorldTypes(world.getTypes()));
+			}
+		}
+		serviceWorldTypes = Collections.unmodifiableMap(snapshot);
 	}
 
 	@Subscribe
@@ -691,20 +761,35 @@ public class ClanClogPlugin extends Plugin
 		{
 			return null;
 		}
-		ClanChannelMember member = channel.findMember(drop.getUsername());
+		ClanChannelMember member = findClanMember(channel, drop.getUsername());
+		int worldId = member == null ? 0 : member.getWorld();
+		return lookupClanWorld(worldId, client.getWorldList());
+	}
+
+	private ClanChannelMember findClanMember(ClanChannel channel, String username)
+	{
+		String name = DropMessageParser.clean(username);
+		ClanChannelMember member = channel.findMember(name);
 		if (member == null)
 		{
-			String identity = DropMessageParser.identity(drop.getUsername());
-			for (ClanChannelMember candidate : channel.getMembers())
+			String identity = DropMessageParser.identity(name);
+			List<ClanChannelMember> members = channel.getMembers();
+			if (members != null)
 			{
-				if (identity.equals(DropMessageParser.identity(candidate.getName())))
+				for (ClanChannelMember candidate : members)
 				{
-					member = candidate;
-					break;
+					if (candidate != null && !identity.isEmpty() && identity.equals(DropMessageParser.identity(candidate.getName())))
+					{
+						return candidate;
+					}
 				}
 			}
 		}
-		int worldId = member == null ? 0 : member.getWorld();
+		return member;
+	}
+
+	private EnumSet<WorldType> lookupClanWorld(int worldId, World[] worlds)
+	{
 		if (worldId <= 0)
 		{
 			return null;
@@ -713,14 +798,21 @@ public class ClanClogPlugin extends Plugin
 		{
 			return client.getWorldType();
 		}
-		World[] worlds = client.getWorldList();
+		Map<Integer, EnumSet<WorldType>> serviceWorlds = serviceWorldTypes;
+		if (serviceWorlds != null && serviceWorlds.get(worldId) != null)
+		{
+			return serviceWorlds.get(worldId);
+		}
 		if (worlds != null)
 		{
 			for (World world : worlds)
 			{
 				if (world != null && world.getId() == worldId)
 				{
-					return world.getTypes();
+					if (world.getTypes() != null)
+					{
+						return world.getTypes();
+					}
 				}
 			}
 		}

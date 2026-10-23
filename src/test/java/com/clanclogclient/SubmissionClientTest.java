@@ -89,7 +89,7 @@ public class SubmissionClientTest
 		}
 		SubmissionClient.validateItemName("x".repeat(200));
 		Submission drop = new Submission(UUID.randomUUID(), "Collector", "Test Clan", 4151,
-			" Original \u00e9 item ", "MEMBERS", "Unrecognized chat proof", false, false);
+			" Original \u00e9 item ", "MEMBERS", "Unrecognized chat proof", false, DetectionSource.OTHER);
 		Request request = SubmissionClient.buildRequest(drop, null, SubmissionClient.endpoint("https://clan.example/submit"), "");
 		Buffer bytes = new Buffer();
 		((okhttp3.MultipartBody) request.body()).parts().get(5).body().writeTo(bytes);
