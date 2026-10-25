@@ -12,7 +12,7 @@ final class DropMessageParser
 	private static final Pattern LOCAL_COLLECTION = Pattern.compile("^New item added to your collection log: (.+)$");
 	private static final Pattern LOCAL_DROP = Pattern.compile("^(?:Valuable|Untradeable) drop: (.+?)(?: \\([\\d,]+ coins\\))?$");
 	private static final Pattern CLAN_COLLECTION = Pattern.compile("^(.+?) received a new collection log item: (.+?)(?: \\([\\d,]+/[\\d,]+\\))?[!.]?$");
-	private static final Pattern CLAN_DROP = Pattern.compile("^(.+?) (?:received a (?:valuable )?drop|received special loot from a raid): (.+?) \\([\\d,]+(?: coins)?\\)(?: from .+)?[!.]?$");
+	private static final Pattern CLAN_DROP = Pattern.compile("^(.+?) (?:received a (?:valuable )?drop|received special loot from a raid): (.+?) \\((?:[\\d,]+(?: coins)?|very valuable)\\)(?: from .+)?[!.]?$");
 	private static final Pattern CLAN_PET = Pattern.compile("^(?:\\[[^\\]]+\\]\\s*)?(.+?) (?:has|have) a funny feeling like (?:(?:he['’]s|she['’]s|they['’]re) being followed|(?:he|she|they) would have been followed): (.+?) at [\\d,]+ killcount[!.]?$");
 	private static final Pattern GAUNTLET_DROP = Pattern.compile("^(.+?) has received a drop: ([\\d,]+ x .+?)[!.]?$");
 	private static final Pattern QUANTITY = Pattern.compile("^[\\d,]+ x (.+)$");

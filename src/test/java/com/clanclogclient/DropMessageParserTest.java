@@ -38,6 +38,24 @@ public class DropMessageParserTest
 	}
 
 	@Test
+	public void parsesVeryValuableClanBroadcasts()
+	{
+		assertDrop(ChatMessageType.CLAN_MESSAGE,
+			"Other Player received a drop: Hill giant club (very valuable) from Obor.",
+			"Hill giant club", "Other Player", true);
+		assertDrop(ChatMessageType.CLAN_MESSAGE,
+			"Other Player received a valuable drop: 2 x Abyssal whip (very valuable)!",
+			"Abyssal whip", "Other Player", true);
+		assertDrop(ChatMessageType.CLAN_MESSAGE,
+			"Nerd\u00a0Stark received special loot from a raid: Scythe of Vitur (uncharged) (very valuable)",
+			"Scythe of Vitur (uncharged)", "Nerd Stark", true);
+		assertFalse(parser.parse(ChatMessageType.CLAN_CHAT,
+			"Other Player received a drop: Hill giant club (very valuable).", "Local Player").isPresent());
+		assertFalse(parser.parse(ChatMessageType.CLAN_MESSAGE,
+			"Other Player received a drop: Hill giant club (unknown value).", "Local Player").isPresent());
+	}
+
+	@Test
 	public void ignoresPlayerChatGuestsAndUnrelatedSystemMessages()
 	{
 		String spoof = "Other Player received a new collection log item: Abyssal whip";
